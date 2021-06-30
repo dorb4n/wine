@@ -421,6 +421,11 @@ static VkResult X11DRV_vkCreateSwapchainKHR(VkDevice device,
         EnterCriticalSection(&context_section);
         XSaveContext(gdi_display, (XID)(*swapchain), vulkan_swapchain_context, (char *)wine_vk_surface_grab(x11_surface));
         LeaveCriticalSection(&context_section);
+
+        /* we can't call udpate_client_window within the context_section, as it'll need to
+         * acquire window data cs, which could be held by another thread calling resize_vk_surfaces
+         * waiting itself on context_section, so we need wine_vk_active_surface to help */
+        udpate_client_window(hwnd);
     }
     return result;
 }
@@ -808,6 +813,96 @@ static VkSurfaceKHR X11DRV_wine_get_native_surface(VkSurfaceKHR surface)
     return x11_surface->surface;
 }
 
+static VkBool32 X11DRV_query_fs_hack(VkSurfaceKHR surface, VkExtent2D *real_sz, VkExtent2D *user_sz,
+        VkRect2D *dst_blit, VkFilter *filter)
+{
+    struct wine_vk_surface *x11_surface = surface_from_handle(surface);
+    HMONITOR monitor;
+    HWND hwnd;
+
+    if (wm_is_steamcompmgr(gdi_display))
+        return VK_FALSE;
+
+    if (XFindContext(gdi_display, x11_surface->window, winContext, (char **)&hwnd) != 0)
+    {
+        ERR("Failed to find hwnd context\n");
+        return VK_FALSE;
+    }
+
+    monitor = fs_hack_monitor_from_hwnd(hwnd);
+    if(fs_hack_enabled(monitor) && !x11_surface->offscreen){
+        RECT real_rect = fs_hack_real_mode(monitor);
+        RECT user_rect = fs_hack_current_mode(monitor);
+        SIZE scaled = fs_hack_get_scaled_screen_size(monitor);
+        POINT scaled_origin;
+
+        scaled_origin.x = user_rect.left;
+        scaled_origin.y = user_rect.top;
+        fs_hack_point_user_to_real(&scaled_origin);
+        scaled_origin.x -= real_rect.left;
+        scaled_origin.y -= real_rect.top;
+
+        TRACE("real_rect:%s user_rect:%s scaled:%dx%d scaled_origin:%s\n", wine_dbgstr_rect(&real_rect),
+              wine_dbgstr_rect(&user_rect), scaled.cx, scaled.cy, wine_dbgstr_point(&scaled_origin));
+
+        if(real_sz){
+            real_sz->width = real_rect.right - real_rect.left;
+            real_sz->height = real_rect.bottom - real_rect.top;
+        }
+
+        if(user_sz){
+            user_sz->width = user_rect.right - user_rect.left;
+            user_sz->height = user_rect.bottom - user_rect.top;
+        }
+
+        if(dst_blit){
+            dst_blit->offset.x = scaled_origin.x;
+            dst_blit->offset.y = scaled_origin.y;
+            dst_blit->extent.width = scaled.cx;
+            dst_blit->extent.height = scaled.cy;
+        }
+
+        if (filter)
+            *filter = fs_hack_is_integer() ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+
+        return VK_TRUE;
+    }
+    else if (fs_hack_enabled(monitor))
+    {
+        double scale = fs_hack_get_user_to_real_scale( monitor );
+        RECT client_rect;
+
+        GetClientRect( hwnd, &client_rect );
+
+        if (real_sz)
+        {
+            real_sz->width = (client_rect.right - client_rect.left) * scale;
+            real_sz->height = (client_rect.bottom - client_rect.top) * scale;
+        }
+
+        if (user_sz)
+        {
+            user_sz->width = client_rect.right - client_rect.left;
+            user_sz->height = client_rect.bottom - client_rect.top;
+        }
+
+        if (dst_blit)
+        {
+            dst_blit->offset.x = client_rect.left * scale;
+            dst_blit->offset.y = client_rect.top * scale;
+            dst_blit->extent.width = (client_rect.right - client_rect.left) * scale;
+            dst_blit->extent.height = (client_rect.bottom - client_rect.top) * scale;
+        }
+
+        if(filter)
+            *filter = fs_hack_is_integer() ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+
+        return VK_TRUE;
+    }
+
+    return VK_FALSE;
+}
+
 static const struct vulkan_funcs vulkan_funcs =
 {
     X11DRV_vkAcquireNextImage2KHR,
@@ -834,6 +929,7 @@ static const struct vulkan_funcs vulkan_funcs =
     X11DRV_vkQueuePresentKHR,
 
     X11DRV_wine_get_native_surface,
+    X11DRV_query_fs_hack,
 };
 
 static void *X11DRV_get_vk_device_proc_addr(const char *name)
@@ -869,6 +965,17 @@ const struct vulkan_funcs *get_vulkan_driver(UINT version)
 {
     ERR("Wine was built without Vulkan support.\n");
     return NULL;
+}
+
+Window wine_vk_active_surface(HWND hwnd)
+{
+    struct list *entry;
+    Window active = None;
+    EnterCriticalSection(&context_section);
+    if (!XFindContext(gdi_display, (XID)hwnd, vulkan_hwnd_context, (char **)&entry))
+        active = LIST_ENTRY(entry, struct wine_vk_surface, entry)->window;
+    LeaveCriticalSection(&context_section);
+    return active;
 }
 
 void wine_vk_surface_destroy(HWND hwnd)

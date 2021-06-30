@@ -279,4 +279,10 @@ enum decoder_type
 };
 HRESULT decode_transform_create(REFIID riid, void **obj, enum decoder_type) DECLSPEC_HIDDEN;
 
+enum decoder_type
+{
+    DECODER_TYPE_H264,
+};
+HRESULT decode_transform_create(REFIID riid, void **obj, enum decoder_type) DECLSPEC_HIDDEN;
+
 #endif /* __GST_PRIVATE_INCLUDED__ */

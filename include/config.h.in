@@ -58,6 +58,9 @@
 /* Define to 1 if you have the <CL/cl.h> header file. */
 #undef HAVE_CL_CL_H
 
+/* Define to 1 if you have the <CL/opencl.h> header file. */
+#undef HAVE_CL_OPENCL_H
+
 /* Define to 1 if you have the <CommonCrypto/CommonCryptor.h> header file. */
 #undef HAVE_COMMONCRYPTO_COMMONCRYPTOR_H
 
@@ -435,6 +438,9 @@
 /* Define to 1 if you have the <mach-o/loader.h> header file. */
 #undef HAVE_MACH_O_LOADER_H
 
+/* Define to 1 if you have the <memory.h> header file. */
+#undef HAVE_MEMORY_H
+
 /* Define to 1 if you have the <Metal/Metal.h> header file. */
 #undef HAVE_METAL_METAL_H
 
@@ -521,9 +527,6 @@
 
 /* Define to 1 if you have the <OpenAL/al.h> header file. */
 #undef HAVE_OPENAL_AL_H
-
-/* Define to 1 if you have the <OpenCL/opencl.h> header file. */
-#undef HAVE_OPENCL_OPENCL_H
 
 /* Define to 1 if `numaudioengines' is a member of `oss_sysinfo'. */
 #undef HAVE_OSS_SYSINFO_NUMAUDIOENGINES
@@ -627,8 +630,8 @@
 /* Define to 1 if you have the <scsi/sg.h> header file. */
 #undef HAVE_SCSI_SG_H
 
-/* Define to 1 if you have the <SDL.h> header file. */
-#undef HAVE_SDL_H
+/* Define to 1 if you have the <SDL2/SDL.h> header file. */
+#undef HAVE_SDL2_SDL_H
 
 /* Define to 1 if you have the <Security/Security.h> header file. */
 #undef HAVE_SECURITY_SECURITY_H
@@ -662,9 +665,6 @@
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
-
-/* Define to 1 if you have the <stdio.h> header file. */
-#undef HAVE_STDIO_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
@@ -1250,9 +1250,7 @@
 /* Define to 1 if the `S_IS*' macros in <sys/stat.h> do not work properly. */
 #undef STAT_MACROS_BROKEN
 
-/* Define to 1 if all of the C90 standard headers exist (not just the ones
-   required in a freestanding environment). This macro is provided for
-   backward compatibility; new code need not use it. */
+/* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
 /* Define if xattr functions take additional arguments (Mac OS X) */
@@ -1260,6 +1258,11 @@
 
 /* Define to 1 if the X Window System is missing or not being used. */
 #undef X_DISPLAY_MISSING
+
+/* Enable large inode numbers on Mac OS X 10.5.  */
+#ifndef _DARWIN_USE_64_BIT_INODE
+# define _DARWIN_USE_64_BIT_INODE 1
+#endif
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS

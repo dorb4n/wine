@@ -1,0 +1,294 @@
+--- dlls/winex11.drv/opengl.c
++++ dlls/winex11.drv/opengl.c
+@@ -2268,12 +2610,153 @@ static BOOL WINAPI glxdrv_wglShareLists(struct wgl_context *org, struct wgl_cont
+     return FALSE;
+ }
+ 
++static void wglBindFramebuffer( GLenum target, GLuint framebuffer )
++{
++    struct wgl_context *ctx = NtCurrentTeb()->glContext;
++
++    TRACE( "target %#x, framebuffer %u\n", target, framebuffer );
++    if (ctx->fs_hack && !framebuffer)
++        framebuffer = ctx->fs_hack_fbo;
++
++    if (target == GL_DRAW_FRAMEBUFFER || target == GL_FRAMEBUFFER)
++        ctx->current_draw_fbo = framebuffer;
++    if (target == GL_READ_FRAMEBUFFER || target == GL_FRAMEBUFFER)
++        ctx->current_read_fbo = framebuffer;
++
++    pglBindFramebuffer( target, framebuffer );
++}
++
++static void wglBindFramebufferEXT( GLenum target, GLuint framebuffer )
++{
++    struct wgl_context *ctx = NtCurrentTeb()->glContext;
++
++    TRACE( "target %#x, framebuffer %u\n", target, framebuffer );
++    if (ctx->fs_hack && !framebuffer)
++        framebuffer = ctx->fs_hack_fbo;
++
++    if (target == GL_DRAW_FRAMEBUFFER || target == GL_FRAMEBUFFER)
++        ctx->current_draw_fbo = framebuffer;
++    if (target == GL_READ_FRAMEBUFFER || target == GL_FRAMEBUFFER)
++        ctx->current_read_fbo = framebuffer;
++
++    pglBindFramebufferEXT( target, framebuffer );
++}
++
++static void wglDrawBuffer( GLenum buffer )
++{
++    struct wgl_context *ctx = NtCurrentTeb()->glContext;
++
++    if (ctx->fs_hack && ctx->current_draw_fbo == ctx->fs_hack_fbo)
++    {
++        TRACE("Overriding %#x with GL_COLOR_ATTACHMENT0\n", buffer);
++        buffer = GL_COLOR_ATTACHMENT0;
++    }
++    pglDrawBuffer( buffer );
++}
++
++static void wglReadBuffer( GLenum buffer )
++{
++    struct wgl_context *ctx = NtCurrentTeb()->glContext;
++
++    if (ctx->fs_hack && ctx->current_read_fbo == ctx->fs_hack_fbo)
++    {
++        TRACE("Overriding %#x with GL_COLOR_ATTACHMENT0\n", buffer);
++        buffer = GL_COLOR_ATTACHMENT0;
++    }
++    pglReadBuffer( buffer );
++}
++
++static void fs_hack_blit_framebuffer( struct gl_drawable *gl, GLenum draw_buffer )
++{
++    struct wgl_context *ctx = NtCurrentTeb()->glContext;
++    SIZE scaled, src, real;
++    GLuint prev_draw_fbo, prev_read_fbo;
++    GLint prev_scissor[4];
++    RECT user_rect, real_rect;
++    POINT scaled_origin;
++    float prev_clear_color[4];
++    HMONITOR monitor;
++
++    monitor = fs_hack_monitor_from_hwnd(WindowFromDC(ctx->hdc));
++    scaled = fs_hack_get_scaled_screen_size(monitor);
++    user_rect = fs_hack_current_mode(monitor);
++    real_rect = fs_hack_real_mode(monitor);
++    src.cx = user_rect.right - user_rect.left;
++    src.cy = user_rect.bottom - user_rect.top;
++    real.cx = real_rect.right - real_rect.left;
++    real.cy = real_rect.bottom - real_rect.top;
++    scaled_origin.x = user_rect.left;
++    scaled_origin.y = user_rect.top;
++    fs_hack_point_user_to_real(&scaled_origin);
++    scaled_origin.x -= real_rect.left;
++    scaled_origin.y -= real_rect.top;
++
++    TRACE("scaled:%dx%d src:%dx%d real:%dx%d user_rect:%s real_rect:%s scaled_origin:%s\n", scaled.cx, scaled.cy,
++          src.cx, src.cy, real.cx, real.cy, wine_dbgstr_rect(&user_rect), wine_dbgstr_rect(&real_rect),
++          wine_dbgstr_point(&scaled_origin));
++
++    if(ctx->setup_for.x != src.cx ||
++            ctx->setup_for.y != src.cy)
++        fs_hack_setup_context( ctx, gl );
++
++    TRACE( "Blitting from FBO %u %ux%u to %ux%u\n", ctx->fs_hack_fbo, src.cx, src.cy, scaled.cx, scaled.cy );
++
++    opengl_funcs.gl.p_glGetIntegerv( GL_DRAW_FRAMEBUFFER_BINDING, (GLint *)&prev_draw_fbo );
++    opengl_funcs.gl.p_glGetIntegerv( GL_READ_FRAMEBUFFER_BINDING, (GLint *)&prev_read_fbo );
++    TRACE( "Previous draw FBO %u, read FBO %u\n", prev_draw_fbo, prev_read_fbo );
++
++    if(gl->has_scissor_indexed){
++        opengl_funcs.ext.p_glGetIntegeri_v(GL_SCISSOR_BOX, 0, prev_scissor);
++        opengl_funcs.ext.p_glScissorIndexed(0, 0, 0, real.cx, real.cy);
++    }else{
++        opengl_funcs.gl.p_glGetIntegerv(GL_SCISSOR_BOX, prev_scissor);
++        opengl_funcs.gl.p_glScissor(0, 0, real.cx, real.cy);
++    }
++
++    pglBindFramebuffer( GL_READ_FRAMEBUFFER, ctx->fs_hack_fbo );
++    if (ctx->fs_hack_color_resolve_renderbuffer)
++    {
++        pglBindFramebuffer( GL_DRAW_FRAMEBUFFER, ctx->fs_hack_resolve_fbo );
++        pglBlitFramebuffer( 0, 0, src.cx, src.cy, 0, 0, src.cx, src.cy, GL_COLOR_BUFFER_BIT, GL_NEAREST );
++        pglBindFramebuffer( GL_READ_FRAMEBUFFER, ctx->fs_hack_resolve_fbo );
++    }
++    pglBindFramebuffer( GL_DRAW_FRAMEBUFFER, 0 );
++
++    //HACK
++    //pglDrawBuffer( draw_buffer );
++    pglDrawBuffer( GL_BACK );
++
++    opengl_funcs.gl.p_glGetFloatv( GL_COLOR_CLEAR_VALUE, prev_clear_color );
++    opengl_funcs.gl.p_glClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
++    opengl_funcs.gl.p_glClear( GL_COLOR_BUFFER_BIT );
++    opengl_funcs.gl.p_glClearColor( prev_clear_color[0], prev_clear_color[1], prev_clear_color[2], prev_clear_color[3] );
++
++    pglBlitFramebuffer( 0, 0, src.cx, src.cy,
++            scaled_origin.x, scaled_origin.y, scaled_origin.x + scaled.cx, scaled_origin.y + scaled.cy,
++            GL_COLOR_BUFFER_BIT, ctx->fs_hack_integer ? GL_NEAREST : GL_LINEAR );
++    //HACK
++    if ( draw_buffer == GL_FRONT )
++        pglXSwapBuffers(gdi_display, gl->drawable);
++
++    if(gl->has_scissor_indexed){
++        opengl_funcs.ext.p_glScissorIndexedv(0, prev_scissor);
++    }else{
++        opengl_funcs.gl.p_glScissor(prev_scissor[0], prev_scissor[1],
++                prev_scissor[2], prev_scissor[3]);
++    }
++
++    pglBindFramebuffer( GL_DRAW_FRAMEBUFFER, prev_draw_fbo );
++    pglBindFramebuffer( GL_READ_FRAMEBUFFER, prev_read_fbo );
++}
++
+ static void wglFinish(void)
+ {
+     struct x11drv_escape_flush_gl_drawable escape;
+     struct gl_drawable *gl;
+     struct wgl_context *ctx = NtCurrentTeb()->glContext;
+ 
++    TRACE("\n");
++
+     escape.code = X11DRV_FLUSH_GL_DRAWABLE;
+     escape.gl_drawable = 0;
+     escape.flush = FALSE;
+@@ -2312,6 +2807,8 @@ static void wglFlush(void)
+     struct gl_drawable *gl;
+     struct wgl_context *ctx = NtCurrentTeb()->glContext;
+ 
++    TRACE("\n");
++
+     escape.code = X11DRV_FLUSH_GL_DRAWABLE;
+     escape.gl_drawable = 0;
+     escape.flush = FALSE;
+--- dlls/winex11.drv/opengl.c
++++ dlls/winex11.drv/opengl.c
+@@ -2432,22 +2432,22 @@ static void fs_hack_blit_framebuffer( struct gl_drawable *gl, GLenum draw_buffer
+ 
+ static void wglFinish(void)
+ {
+-    struct x11drv_escape_flush_gl_drawable escape;
++    struct x11drv_escape_present_drawable escape;
+     struct gl_drawable *gl;
+     struct wgl_context *ctx = NtCurrentTeb()->glContext;
+ 
+     TRACE("\n");
+ 
+-    escape.code = X11DRV_FLUSH_GL_DRAWABLE;
+-    escape.gl_drawable = 0;
++    escape.code = X11DRV_PRESENT_DRAWABLE;
++    escape.drawable = 0;
+     escape.flush = FALSE;
+ 
+     if ((gl = get_gl_drawable( WindowFromDC( ctx->hdc ), 0 )))
+     {
+         switch (gl->type)
+         {
+-        case DC_GL_PIXMAP_WIN: escape.gl_drawable = gl->pixmap; break;
+-        case DC_GL_CHILD_WIN:  escape.gl_drawable = gl->window; break;
++        case DC_GL_PIXMAP_WIN: escape.drawable = gl->pixmap; break;
++        case DC_GL_CHILD_WIN:  escape.drawable = gl->window; break;
+         default: break;
+         }
+         sync_context(ctx);
+@@ -2467,27 +2467,27 @@ static void wglFinish(void)
+     }
+ 
+     pglFinish();
+-    if (escape.gl_drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
++    if (escape.drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
+ }
+ 
+ static void wglFlush(void)
+ {
+-    struct x11drv_escape_flush_gl_drawable escape;
++    struct x11drv_escape_present_drawable escape;
+     struct gl_drawable *gl;
+     struct wgl_context *ctx = NtCurrentTeb()->glContext;
+ 
+     TRACE("\n");
+ 
+-    escape.code = X11DRV_FLUSH_GL_DRAWABLE;
+-    escape.gl_drawable = 0;
++    escape.code = X11DRV_PRESENT_DRAWABLE;
++    escape.drawable = 0;
+     escape.flush = FALSE;
+ 
+     if ((gl = get_gl_drawable( WindowFromDC( ctx->hdc ), 0 )))
+     {
+         switch (gl->type)
+         {
+-        case DC_GL_PIXMAP_WIN: escape.gl_drawable = gl->pixmap; break;
+-        case DC_GL_CHILD_WIN:  escape.gl_drawable = gl->window; break;
++        case DC_GL_PIXMAP_WIN: escape.drawable = gl->pixmap; break;
++        case DC_GL_CHILD_WIN:  escape.drawable = gl->window; break;
+         default: break;
+         }
+         sync_context(ctx);
+@@ -2507,7 +2507,7 @@ static void wglFlush(void)
+     }
+ 
+     pglFlush();
+-    if (escape.gl_drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
++    if (escape.drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
+ }
+ 
+ static const GLubyte *wglGetString(GLenum name)
+@@ -3822,15 +3822,15 @@ static void X11DRV_WineGL_LoadExtensions(void)
+  */
+ static BOOL WINAPI glxdrv_wglSwapBuffers( HDC hdc )
+ {
+-    struct x11drv_escape_flush_gl_drawable escape;
++    struct x11drv_escape_present_drawable escape;
+     struct gl_drawable *gl;
+     struct wgl_context *ctx = NtCurrentTeb()->glContext;
+     INT64 ust, msc, sbc, target_sbc = 0;
+ 
+     TRACE("(%p)\n", hdc);
+ 
+-    escape.code = X11DRV_FLUSH_GL_DRAWABLE;
+-    escape.gl_drawable = 0;
++    escape.code = X11DRV_PRESENT_DRAWABLE;
++    escape.drawable = 0;
+     escape.flush = !pglXWaitForSbcOML;
+ 
+     if (!(gl = get_gl_drawable( WindowFromDC( hdc ), hdc )))
+@@ -3851,7 +3851,7 @@ static BOOL WINAPI glxdrv_wglSwapBuffers( HDC hdc )
+     {
+     case DC_GL_PIXMAP_WIN:
+         if (ctx) sync_context( ctx );
+-        escape.gl_drawable = gl->pixmap;
++        escape.drawable = gl->pixmap;
+         if (pglXCopySubBufferMESA) {
+             /* (glX)SwapBuffers has an implicit glFlush effect, however
+              * GLX_MESA_copy_sub_buffer doesn't. Make sure GL is flushed before
+@@ -3872,10 +3872,10 @@ static BOOL WINAPI glxdrv_wglSwapBuffers( HDC hdc )
+     case DC_GL_WINDOW:
+     case DC_GL_CHILD_WIN:
+         if (ctx) sync_context( ctx );
+-        if (gl->type == DC_GL_CHILD_WIN) escape.gl_drawable = gl->window;
++        if (gl->type == DC_GL_CHILD_WIN) escape.drawable = gl->window;
+         /* fall through */
+     default:
+-        if (escape.gl_drawable && pglXSwapBuffersMscOML)
++        if (escape.drawable && pglXSwapBuffersMscOML)
+         {
+             pglFlush();
+             target_sbc = pglXSwapBuffersMscOML( gdi_display, gl->drawable, 0, 0, 0 );
+@@ -3895,12 +3895,12 @@ static BOOL WINAPI glxdrv_wglSwapBuffers( HDC hdc )
+         break;
+     }
+ 
+-    if (escape.gl_drawable && pglXWaitForSbcOML)
++    if (escape.drawable && pglXWaitForSbcOML)
+         pglXWaitForSbcOML( gdi_display, gl->drawable, target_sbc, &ust, &msc, &sbc );
+ 
+     release_gl_drawable( gl );
+ 
+-    if (escape.gl_drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
++    if (escape.drawable) ExtEscape( ctx->hdc, X11DRV_ESCAPE, sizeof(escape), (LPSTR)&escape, 0, NULL );
+     return TRUE;
+ }
+ 

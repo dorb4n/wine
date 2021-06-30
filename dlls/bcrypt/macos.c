@@ -284,6 +284,12 @@ static NTSTATUS CDECL key_secret_agreement( struct key *priv_key, struct key *pe
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static NTSTATUS CDECL key_secret_agreement( struct key *priv_key, struct key *peer_key, struct secret *secret )
+{
+    FIXME( "not implemented on Mac\n" );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 static const struct key_funcs key_funcs =
 {
     key_set_property,

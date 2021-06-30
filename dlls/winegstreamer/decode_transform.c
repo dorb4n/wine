@@ -163,6 +163,12 @@ static ULONG WINAPI mf_decoder_Release(IMFTransform *iface)
         if (decoder->wg_parser)
             unix_funcs->wg_parser_destroy(decoder->wg_parser);
 
+        if (decoder->output_type)
+        {
+            IMFMediaType_Release(decoder->output_type);
+            decoder->output_type = NULL;
+        }
+
         DeleteCriticalSection(&decoder->cs);
         DeleteCriticalSection(&decoder->help_cs);
         DeleteCriticalSection(&decoder->event_cs);
@@ -1195,6 +1201,11 @@ HRESULT decode_transform_create(REFIID riid, void **obj, enum decoder_type type)
         return E_OUTOFMEMORY;
     }
     object->wg_parser = parser;
+
+    object->type = type;
+    object->video = decoder_descs[type].major_type == &MFMediaType_Video;
+
+    InitializeCriticalSection(&object->cs);
 
     *obj = &object->IMFTransform_iface;
     return S_OK;

@@ -22,18 +22,20 @@ WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
 
 #if defined(USE_STRUCT_CONVERSION)
 static inline void convert_VkAcquireNextImageInfoKHR_win_to_host(const VkAcquireNextImageInfoKHR *in, VkAcquireNextImageInfoKHR_host *out)
+#else
+static inline void convert_VkAcquireNextImageInfoKHR_win_to_host(const VkAcquireNextImageInfoKHR *in, VkAcquireNextImageInfoKHR *out)
+#endif /* USE_STRUCT_CONVERSION */
 {
     if (!in) return;
 
     out->sType = in->sType;
     out->pNext = in->pNext;
-    out->swapchain = in->swapchain;
+    out->swapchain = ((struct VkSwapchainKHR_T *)(uintptr_t) (in->swapchain))->swapchain;
     out->timeout = in->timeout;
     out->semaphore = in->semaphore;
     out->fence = in->fence;
     out->deviceMask = in->deviceMask;
 }
-#endif /* USE_STRUCT_CONVERSION */
 
 #if defined(USE_STRUCT_CONVERSION)
 static inline void convert_VkAcquireProfilingLockInfoKHR_win_to_host(const VkAcquireProfilingLockInfoKHR *in, VkAcquireProfilingLockInfoKHR_host *out)
@@ -1546,7 +1548,7 @@ static inline void convert_VkSwapchainCreateInfoKHR_win_to_host(const VkSwapchai
     out->compositeAlpha = in->compositeAlpha;
     out->presentMode = in->presentMode;
     out->clipped = in->clipped;
-    out->oldSwapchain = in->oldSwapchain;
+    out->oldSwapchain = ((struct VkSwapchainKHR_T *)(uintptr_t) (in->oldSwapchain))->swapchain;
 }
 
 #if defined(USE_STRUCT_CONVERSION)
@@ -2316,6 +2318,25 @@ static inline void free_VkBindSparseInfo_array(VkBindSparseInfo_host *in, uint32
     free(in);
 }
 #endif /* USE_STRUCT_CONVERSION */
+
+static inline void convert_VkPresentInfoKHR_win_to_host(const VkPresentInfoKHR *in, VkPresentInfoKHR *out)
+{
+    if (!in) return;
+
+    out->sType = in->sType;
+    out->pNext = in->pNext;
+    out->waitSemaphoreCount = in->waitSemaphoreCount;
+    out->pWaitSemaphores = in->pWaitSemaphores;
+    out->swapchainCount = in->swapchainCount;
+    out->pSwapchains = convert_VkSwapchainKHR_array_win_to_host(in->pSwapchains, in->swapchainCount);
+    out->pImageIndices = in->pImageIndices;
+    out->pResults = in->pResults;
+}
+
+static inline void free_VkPresentInfoKHR(VkPresentInfoKHR *in)
+{
+    free_VkSwapchainKHR_array((VkSwapchainKHR *)in->pSwapchains, in->swapchainCount);
+}
 
 static inline VkSubmitInfo *convert_VkSubmitInfo_array_win_to_host(const VkSubmitInfo *in, uint32_t count)
 {
@@ -4384,15 +4405,21 @@ static VkResult WINAPI wine_vkAcquireNextImage2KHR(VkDevice device, const VkAcqu
 
     return result;
 #else
+    VkResult result;
+    VkAcquireNextImageInfoKHR pAcquireInfo_host;
     TRACE("%p, %p, %p\n", device, pAcquireInfo, pImageIndex);
-    return device->funcs.p_vkAcquireNextImage2KHR(device->device, pAcquireInfo, pImageIndex);
+
+    convert_VkAcquireNextImageInfoKHR_win_to_host(pAcquireInfo, &pAcquireInfo_host);
+    result = device->funcs.p_vkAcquireNextImage2KHR(device->device, &pAcquireInfo_host, pImageIndex);
+
+    return result;
 #endif
 }
 
 static VkResult WINAPI wine_vkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t *pImageIndex)
 {
     TRACE("%p, 0x%s, 0x%s, 0x%s, 0x%s, %p\n", device, wine_dbgstr_longlong(swapchain), wine_dbgstr_longlong(timeout), wine_dbgstr_longlong(semaphore), wine_dbgstr_longlong(fence), pImageIndex);
-    return device->funcs.p_vkAcquireNextImageKHR(device->device, swapchain, timeout, semaphore, fence, pImageIndex);
+    return device->funcs.p_vkAcquireNextImageKHR(device->device, ((struct VkSwapchainKHR_T *)(uintptr_t) (swapchain))->swapchain, timeout, semaphore, fence, pImageIndex);
 }
 
 static VkResult WINAPI wine_vkAcquirePerformanceConfigurationINTEL(VkDevice device, const VkPerformanceConfigurationAcquireInfoINTEL *pAcquireInfo, VkPerformanceConfigurationINTEL *pConfiguration)
@@ -6196,7 +6223,7 @@ static VkResult WINAPI wine_vkCreateSwapchainKHR(VkDevice device, const VkSwapch
     TRACE("%p, %p, %p, %p\n", device, pCreateInfo, pAllocator, pSwapchain);
 
     convert_VkSwapchainCreateInfoKHR_win_to_host(pCreateInfo, &pCreateInfo_host);
-    result = device->funcs.p_vkCreateSwapchainKHR(device->device, &pCreateInfo_host, NULL, pSwapchain);
+    result = device->funcs.p_vkCreateSwapchainKHR(device->device, &pCreateInfo_host, NULL, ((struct VkSwapchainKHR_T *)(uintptr_t) (pSwapchain))->swapchain);
 
     return result;
 #else
@@ -6205,7 +6232,7 @@ static VkResult WINAPI wine_vkCreateSwapchainKHR(VkDevice device, const VkSwapch
     TRACE("%p, %p, %p, %p\n", device, pCreateInfo, pAllocator, pSwapchain);
 
     convert_VkSwapchainCreateInfoKHR_win_to_host(pCreateInfo, &pCreateInfo_host);
-    result = device->funcs.p_vkCreateSwapchainKHR(device->device, &pCreateInfo_host, NULL, pSwapchain);
+    result = device->funcs.p_vkCreateSwapchainKHR(device->device, &pCreateInfo_host, NULL, ((struct VkSwapchainKHR_T *)(uintptr_t) (pSwapchain))->swapchain);
 
     return result;
 #endif
@@ -6422,7 +6449,7 @@ static void WINAPI wine_vkDestroyShaderModule(VkDevice device, VkShaderModule sh
 static void WINAPI wine_vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks *pAllocator)
 {
     TRACE("%p, 0x%s, %p\n", device, wine_dbgstr_longlong(swapchain), pAllocator);
-    device->funcs.p_vkDestroySwapchainKHR(device->device, swapchain, NULL);
+    device->funcs.p_vkDestroySwapchainKHR(device->device, ((struct VkSwapchainKHR_T *)(uintptr_t) (swapchain))->swapchain, NULL);
 }
 
 static void WINAPI wine_vkDestroyValidationCacheEXT(VkDevice device, VkValidationCacheEXT validationCache, const VkAllocationCallbacks *pAllocator)
@@ -7398,7 +7425,7 @@ static VkResult WINAPI wine_vkGetShaderInfoAMD(VkDevice device, VkPipeline pipel
 static VkResult WINAPI wine_vkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t *pSwapchainImageCount, VkImage *pSwapchainImages)
 {
     TRACE("%p, 0x%s, %p, %p\n", device, wine_dbgstr_longlong(swapchain), pSwapchainImageCount, pSwapchainImages);
-    return device->funcs.p_vkGetSwapchainImagesKHR(device->device, swapchain, pSwapchainImageCount, pSwapchainImages);
+    return device->funcs.p_vkGetSwapchainImagesKHR(device->device, ((struct VkSwapchainKHR_T *)(uintptr_t) (swapchain))->swapchain, pSwapchainImageCount, pSwapchainImages);
 }
 
 static VkResult WINAPI wine_vkGetValidationCacheDataEXT(VkDevice device, VkValidationCacheEXT validationCache, size_t *pDataSize, void *pData)
@@ -7487,8 +7514,15 @@ static void WINAPI wine_vkQueueInsertDebugUtilsLabelEXT(VkQueue queue, const VkD
 
 static VkResult WINAPI wine_vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo)
 {
+    VkResult result;
+    VkPresentInfoKHR pPresentInfo_host;
     TRACE("%p, %p\n", queue, pPresentInfo);
-    return queue->device->funcs.p_vkQueuePresentKHR(queue->queue, pPresentInfo);
+
+    convert_VkPresentInfoKHR_win_to_host(pPresentInfo, &pPresentInfo_host);
+    result = queue->device->funcs.p_vkQueuePresentKHR(queue->queue, &pPresentInfo_host);
+
+    free_VkPresentInfoKHR(&pPresentInfo_host);
+    return result;
 }
 
 static VkResult WINAPI wine_vkQueueSetPerformanceConfigurationINTEL(VkQueue queue, VkPerformanceConfigurationINTEL configuration)
@@ -7984,7 +8018,8 @@ BOOL wine_vk_is_type_wrapped(VkObjectType type)
         type == VK_OBJECT_TYPE_INSTANCE ||
         type == VK_OBJECT_TYPE_PHYSICAL_DEVICE ||
         type == VK_OBJECT_TYPE_QUEUE ||
-        type == VK_OBJECT_TYPE_SURFACE_KHR;
+        type == VK_OBJECT_TYPE_SURFACE_KHR ||
+        type == VK_OBJECT_TYPE_SWAPCHAIN_KHR;
 }
 
 uint64_t wine_vk_unwrap_handle(VkObjectType type, uint64_t handle)
@@ -8009,6 +8044,8 @@ uint64_t wine_vk_unwrap_handle(VkObjectType type, uint64_t handle)
         return (uint64_t) (uintptr_t) ((VkQueue) (uintptr_t) handle)->queue;
     case VK_OBJECT_TYPE_SURFACE_KHR:
         return (uint64_t) wine_surface_from_handle(handle)->surface;
+    case VK_OBJECT_TYPE_SWAPCHAIN_KHR:
+        return (uint64_t) ((struct VkSwapchainKHR_T *)(uintptr_t) (handle))->swapchain;
     default:
        return handle;
     }

@@ -1,0 +1,159 @@
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -412,6 +412,7 @@ class_objects[] =
+     { &CLSID_VideoProcessorMFT, &video_processor_create },
+     { &CLSID_GStreamerByteStreamHandler, &winegstreamer_stream_handler_create },
+     { &CLSID_WINEAudioConverter, &audio_converter_create },
++    { &CLSID_CMSH264DecoderMFT, &decode_transform_create },
+ };
+ 
+ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -417,7 +422,7 @@ class_objects[] =
+     { &CLSID_VideoProcessorMFT, &video_processor_create },
+     { &CLSID_GStreamerByteStreamHandler, &winegstreamer_stream_handler_create },
+     { &CLSID_WINEAudioConverter, &audio_converter_create },
+-    { &CLSID_CMSH264DecoderMFT, &decode_transform_create },
++    { &CLSID_CMSH264DecoderMFT, &h264_decoder_create },
+ };
+ 
+ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -532,6 +532,7 @@ video_formats[] =
+     {&MFVideoFormat_YUY2,   WG_VIDEO_FORMAT_YUY2},
+     {&MFVideoFormat_YV12,   WG_VIDEO_FORMAT_YV12},
+     {&MFVideoFormat_YVYU,   WG_VIDEO_FORMAT_YVYU},
++    {&MFVideoFormat_H264,   WG_VIDEO_FORMAT_H264},
+ };
+ 
+ static const struct
+@@ -715,10 +716,22 @@ static void mf_media_type_to_wg_format_video(IMFMediaType *type, struct wg_forma
+         if (IsEqualGUID(&subtype, video_formats[i].subtype))
+         {
+             format->u.video.format = video_formats[i].format;
+-            return;
++            break;
+         }
+     }
+-    FIXME("Unrecognized video subtype %s.\n", debugstr_guid(&subtype));
++    if (i == ARRAY_SIZE(video_formats))
++        FIXME("Unrecognized video subtype %s.\n", debugstr_guid(&subtype));
++
++    if (format->u.video.format == WG_VIDEO_FORMAT_H264)
++    {
++        UINT32 profile, level;
++
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_MPEG2_PROFILE, &profile)))
++            format->u.video.compressed.h264.profile = profile;
++
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_MPEG2_LEVEL, &level)))
++            format->u.video.compressed.h264.level = level;
++    }
+ }
+ 
+ void mf_media_type_to_wg_format(IMFMediaType *type, struct wg_format *format)
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -423,6 +428,7 @@ class_objects[] =
+     { &CLSID_GStreamerByteStreamHandler, &winegstreamer_stream_handler_create },
+     { &CLSID_WINEAudioConverter, &audio_converter_create },
+     { &CLSID_CMSH264DecoderMFT, &h264_decoder_create },
++    { &CLSID_CMSAACDecMFT, &aac_decoder_create },
+ };
+ 
+ HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+@@ -603,7 +609,8 @@ static IMFMediaType *mf_media_type_from_wg_format_audio(const struct wg_format *
+             IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_BITS_PER_SAMPLE, audio_formats[i].depth);
+             IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, format->u.audio.rate);
+             IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, format->u.audio.channels);
+-            IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_CHANNEL_MASK, format->u.audio.channel_mask);
++            if (format->u.audio.channel_mask)
++                IMFMediaType_SetUINT32(type, &MF_MT_AUDIO_CHANNEL_MASK, format->u.audio.channel_mask);
+ 
+             return type;
+         }
+@@ -689,6 +697,8 @@ static void mf_media_type_to_wg_format_audio(IMFMediaType *type, struct wg_forma
+             channel_mask = KSAUDIO_SPEAKER_MONO;
+         else if (channels == 2)
+             channel_mask = KSAUDIO_SPEAKER_STEREO;
++        else if IsEqualGUID(&subtype, &MFAudioFormat_AAC)
++            channel_mask = 0;
+         else
+         {
+             FIXME("Channel mask is not set.\n");
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -22,6 +22,7 @@
+ #include "mfapi.h"
+ #include "ks.h"
+ #include "ksmedia.h"
++#include "wmcodecdsp.h"
+ 
+ #include "wine/debug.h"
+ 
+@@ -422,6 +423,7 @@ class_objects[] =
+     { &CLSID_VideoProcessorMFT, &video_processor_create },
+     { &CLSID_GStreamerByteStreamHandler, &winegstreamer_stream_handler_create },
+     { &CLSID_WINEAudioConverter, &audio_converter_create },
++    { &CLSID_CColorConvertDMO, &color_converter_create },
+     { &CLSID_CMSH264DecoderMFT, &h264_decoder_create },
+     { &CLSID_CMSAACDecMFT, &aac_decoder_create },
+ };
+--- dlls/winegstreamer/mfplat.c
++++ dlls/winegstreamer/mfplat.c
+@@ -461,6 +461,26 @@ static const GUID *audio_converter_supported_types[] =
+     &MFAudioFormat_Float,
+ };
+ 
++static WCHAR color_converterW[] = L"Color Converter";
++static const GUID *color_converter_supported_types[] =
++{
++    &MFVideoFormat_RGB24,
++    &MFVideoFormat_RGB32,
++    &MFVideoFormat_RGB555,
++    &MFVideoFormat_RGB8,
++    &MFVideoFormat_AYUV,
++    &MFVideoFormat_I420,
++    &MFVideoFormat_IYUV,
++    &MFVideoFormat_NV11,
++    &MFVideoFormat_NV12,
++    &MFVideoFormat_UYVY,
++    &MFVideoFormat_v216,
++    &MFVideoFormat_v410,
++    &MFVideoFormat_YUY2,
++    &MFVideoFormat_YVYU,
++    &MFVideoFormat_YVYU,
++};
++
+ static WCHAR h264_decoderW[] = L"H.264 Decoder";
+ static const GUID *h264_decoder_input_types[] =
+ {
+@@ -511,6 +531,17 @@ mfts[] =
+         ARRAY_SIZE(audio_converter_supported_types),
+         audio_converter_supported_types,
+     },
++    {
++        &CLSID_CColorConvertDMO,
++        &MFT_CATEGORY_VIDEO_EFFECT,
++        color_converterW,
++        MFT_ENUM_FLAG_SYNCMFT,
++        &MFMediaType_Video,
++        ARRAY_SIZE(color_converter_supported_types),
++        color_converter_supported_types,
++        ARRAY_SIZE(color_converter_supported_types),
++        color_converter_supported_types,
++    },
+     {
+         &CLSID_CMSH264DecoderMFT,
+         &MFT_CATEGORY_VIDEO_DECODER,
+@@ -539,7 +570,7 @@ HRESULT mfplat_DllRegisterServer(void)
+ {
+     unsigned int i, j;
+     HRESULT hr;
+-    MFT_REGISTER_TYPE_INFO input_types[2], output_types[2];
++    MFT_REGISTER_TYPE_INFO input_types[15], output_types[15];
+ 
+     for (i = 0; i < ARRAY_SIZE(mfts); i++)
+     {

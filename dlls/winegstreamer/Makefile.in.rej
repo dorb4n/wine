@@ -1,0 +1,20 @@
+--- dlls/winegstreamer/Makefile.in
++++ dlls/winegstreamer/Makefile.in
+@@ -8,6 +8,7 @@ EXTRADLLFLAGS = -mno-cygwin
+ 
+ C_SRCS = \
+ 	audioconvert.c \
++	decode_transform.c \
+ 	main.c \
+ 	media_source.c \
+ 	mfplat.c \
+--- dlls/winegstreamer/Makefile.in
++++ dlls/winegstreamer/Makefile.in
+@@ -8,6 +8,7 @@ EXTRADLLFLAGS = -mno-cygwin
+ 
+ C_SRCS = \
+ 	audioconvert.c \
++	colorconvert.c \
+ 	decode_transform.c \
+ 	main.c \
+ 	media_source.c \

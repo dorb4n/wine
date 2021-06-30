@@ -404,6 +404,7 @@ static HRESULT WINAPI test_source_Start(IMFMediaSource *iface, IMFPresentationDe
     PROPVARIANT var;
     HRESULT hr;
     int i;
+    PROPVARIANT pos;
 
     ok(time_format && IsEqualGUID(time_format, &GUID_NULL), "Unexpected time format %s.\n",
             wine_dbgstr_guid(time_format));
@@ -919,6 +920,11 @@ static void test_source_reader_from_media_source(void)
 
     hr = IMFSourceReader_SetStreamSelection(reader, 1, TRUE);
     ok(hr == S_OK, "Failed to select a stream, hr %#x.\n", hr);
+
+    pos.vt = VT_I8;
+    pos.hVal.QuadPart = 0;
+    hr = IMFSourceReader_SetCurrentPosition(reader, &GUID_NULL, &pos);
+    ok(hr == S_OK, "Failed to seek to beginning of stream, hr %#x.\n", hr);
 
     pos.vt = VT_I8;
     pos.hVal.QuadPart = 0;

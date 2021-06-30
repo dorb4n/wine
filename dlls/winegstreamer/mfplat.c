@@ -413,6 +413,16 @@ static HRESULT aac_decoder_create(REFIID riid, void **ret)
     return decode_transform_create(riid, ret, DECODER_TYPE_AAC);
 }
 
+static HRESULT h264_decoder_create(REFIID riid, void **ret)
+{
+    return decode_transform_create(riid, ret, DECODER_TYPE_H264);
+}
+
+static HRESULT aac_decoder_create(REFIID riid, void **ret)
+{
+    return decode_transform_create(riid, ret, DECODER_TYPE_AAC);
+}
+
 static const struct class_object
 {
     const GUID *clsid;
@@ -506,6 +516,31 @@ static const GUID *aac_decoder_output_types[] =
     &MFAudioFormat_PCM,
 };
 
+static WCHAR h264_decoderW[] = L"H.264 Decoder";
+static const GUID *h264_decoder_input_types[] =
+{
+    &MFVideoFormat_H264,
+};
+static const GUID *h264_decoder_output_types[] =
+{
+    &MFVideoFormat_NV12,
+    &MFVideoFormat_I420,
+    &MFVideoFormat_IYUV,
+    &MFVideoFormat_YUY2,
+    &MFVideoFormat_YV12,
+};
+
+static WCHAR aac_decoderW[] = L"AAC Decoder";
+static const GUID *aac_decoder_input_types[] =
+{
+    &MFAudioFormat_AAC,
+};
+static const GUID *aac_decoder_output_types[] =
+{
+    &MFAudioFormat_Float,
+    &MFAudioFormat_PCM,
+};
+
 static const struct mft
 {
     const GUID *clsid;
@@ -541,6 +576,28 @@ mfts[] =
         color_converter_supported_types,
         ARRAY_SIZE(color_converter_supported_types),
         color_converter_supported_types,
+    },
+    {
+        &CLSID_CMSH264DecoderMFT,
+        &MFT_CATEGORY_VIDEO_DECODER,
+        h264_decoderW,
+        MFT_ENUM_FLAG_SYNCMFT,
+        &MFMediaType_Video,
+        ARRAY_SIZE(h264_decoder_input_types),
+        h264_decoder_input_types,
+        ARRAY_SIZE(h264_decoder_output_types),
+        h264_decoder_output_types,
+    },
+    {
+        &CLSID_CMSAACDecMFT,
+        &MFT_CATEGORY_AUDIO_DECODER,
+        aac_decoderW,
+        MFT_ENUM_FLAG_SYNCMFT,
+        &MFMediaType_Audio,
+        ARRAY_SIZE(aac_decoder_input_types),
+        aac_decoder_input_types,
+        ARRAY_SIZE(aac_decoder_output_types),
+        aac_decoder_output_types,
     },
     {
         &CLSID_CMSH264DecoderMFT,
@@ -647,6 +704,58 @@ static IMFMediaType *mf_media_type_from_wg_format_audio(const struct wg_format *
 {
     IMFMediaType *type;
     unsigned int i;
+
+    if (IsEqualGUID(&subtype, &MFAudioFormat_AAC))
+    {
+        UINT32 payload_type, indication, user_data_size;
+        unsigned char *user_data;
+
+        format->u.audio.format = WG_AUDIO_FORMAT_AAC;
+
+        if (SUCCEEDED(IMFMediaType_GetBlobSize(type, &MF_MT_USER_DATA, &user_data_size)))
+        {
+            user_data = malloc(user_data_size);
+            if (SUCCEEDED(IMFMediaType_GetBlob(type, &MF_MT_USER_DATA, user_data, user_data_size, NULL)))
+            {
+                struct {
+                    WORD payload_type;
+                    WORD indication;
+                    WORD type;
+                    WORD reserved1;
+                    DWORD reserved2;
+                } *aac_info = (void *) user_data;
+
+                format->u.audio.compressed.aac.payload_type = aac_info->payload_type;
+                format->u.audio.compressed.aac.indication = aac_info->indication;
+
+                /* Audio specific config is stored at after HEAACWAVEINFO in MF_MT_USER_DATA
+                    https://docs.microsoft.com/en-us/windows/win32/api/mmreg/ns-mmreg-heaacwaveformat */
+                if (user_data_size > 12)
+                {
+                    user_data += 12;
+                    user_data_size -= 12;
+
+                    if (user_data_size > sizeof(format->u.audio.compressed.aac.audio_specifc_config))
+                    {
+                        FIXME("Encountered Audio-Specific-Config with a size larger than we support %u\n", user_data_size);
+                        user_data_size = sizeof(format->u.audio.compressed.aac.audio_specifc_config);
+                    }
+
+                    memcpy(format->u.audio.compressed.aac.audio_specifc_config, user_data, user_data_size);
+                    format->u.audio.compressed.aac.asp_size = user_data_size;
+                }
+
+            }
+        }
+
+        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AAC_PAYLOAD_TYPE, &payload_type)))
+            format->u.audio.compressed.aac.payload_type = payload_type;
+
+        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, &indication)))
+            format->u.audio.compressed.aac.indication = indication;
+
+        return;
+    }
 
     for (i = 0; i < ARRAY_SIZE(audio_formats); ++i)
     {

@@ -411,11 +411,89 @@ static void wg_set_caps_from_wg_format(GstCaps *caps, const struct wg_format *fo
     }
 }
 
+static void wg_set_caps_from_wg_format(GstCaps *caps, const struct wg_format *format)
+{
+    switch (format->major_type)
+    {
+        case WG_MAJOR_TYPE_VIDEO:
+        {
+            gst_caps_set_simple(caps, "width", G_TYPE_INT, format->u.video.width, NULL);
+            gst_caps_set_simple(caps, "height", G_TYPE_INT, format->u.video.height, NULL);
+            gst_caps_set_simple(caps, "framerate", GST_TYPE_FRACTION, format->u.video.fps_n, format->u.video.fps_d, NULL);
+            break;
+        }
+        case WG_MAJOR_TYPE_AUDIO:
+        {
+            gst_caps_set_simple(caps, "rate", G_TYPE_INT, format->u.audio.rate, NULL);
+            gst_caps_set_simple(caps, "channels", G_TYPE_INT, format->u.audio.channels, NULL);
+            if (format->u.audio.channel_mask)
+                gst_caps_set_simple(caps, "channel-mask", G_TYPE_INT, format->u.audio.channel_mask, NULL);
+        }
+        default:
+            break;
+    }
+}
+
 static GstCaps *wg_format_to_caps_audio(const struct wg_format *format)
 {
     GstAudioChannelPosition positions[32];
     GstAudioFormat audio_format;
     GstAudioInfo info;
+
+    /* compressed types */
+
+    if (format->u.audio.format == WG_AUDIO_FORMAT_AAC)
+    {
+        const char *profile, *level;
+        GstBuffer *audio_specific_config;
+        GstCaps *caps = gst_caps_new_empty_simple("audio/mpeg");
+        wg_set_caps_from_wg_format(caps, format);
+
+        gst_caps_set_simple(caps, "mpegversion", G_TYPE_INT, 4, NULL);
+
+        switch (format->u.audio.compressed.aac.payload_type)
+        {
+            case 0:
+                gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "raw", NULL);
+                break;
+            case 1:
+                gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "adts", NULL);
+                break;
+            case 2:
+                gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "adif", NULL);
+                break;
+            case 3:
+                gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "loas", NULL);
+                break;
+            default:
+                gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "raw", NULL);
+        };
+
+        switch (format->u.audio.compressed.aac.indication)
+        {
+            case 0x29: profile = "lc"; level = "2";  break;
+            case 0x2A: profile = "lc"; level = "4"; break;
+            case 0x2B: profile = "lc"; level = "5"; break;
+            default:
+                FIXME("Unrecognized profile-level-indication %u\n", format->u.audio.compressed.aac.indication);
+                /* fallthrough */
+            case 0x00: case 0xFE: profile = level = NULL; break; /* unspecified */
+        }
+
+        if (profile)
+            gst_caps_set_simple(caps, "profile", G_TYPE_STRING, profile, NULL);
+        if (level)
+            gst_caps_set_simple(caps, "level", G_TYPE_STRING, level, NULL);
+
+        audio_specific_config = gst_buffer_new_allocate(NULL, format->u.audio.compressed.aac.asp_size, NULL);
+        gst_buffer_fill(audio_specific_config, 0, format->u.audio.compressed.aac.audio_specifc_config, format->u.audio.compressed.aac.asp_size);
+        gst_caps_set_simple(caps, "codec_data", GST_TYPE_BUFFER, audio_specific_config, NULL);
+        gst_buffer_unref(audio_specific_config);
+
+        return caps;
+    }
+
+    /* uncompressed_types */
 
     /* compressed types */
 
@@ -506,6 +584,65 @@ static GstCaps *wg_format_to_caps_video(const struct wg_format *format)
     GstVideoInfo info;
     unsigned int i;
     GstCaps *caps;
+
+    /* compressed types */
+
+    if (format->u.video.format == WG_VIDEO_FORMAT_H264)
+    {
+        const char *profile;
+        const char *level;
+
+        caps = gst_caps_new_empty_simple("video/x-h264");
+        wg_set_caps_from_wg_format(caps, format);
+
+        gst_caps_set_simple(caps, "stream-format", G_TYPE_STRING, "byte-stream", NULL);
+        gst_caps_set_simple(caps, "alignment", G_TYPE_STRING, "au", NULL);
+
+        switch (format->u.video.compressed.h264.profile)
+        {
+            case /* eAVEncH264VProfile_Main */ 77:  profile = "main"; break;
+            case /* eAVEncH264VProfile_High */ 100: profile = "high"; break;
+            case /* eAVEncH264VProfile_444 */  244: profile = "high-4:4:4"; break;
+            default:
+                ERR("Unrecognized H.264 profile attribute %u\n", format->u.video.compressed.h264.profile);
+                /* fallthrough */
+            case 0: profile = NULL;
+        }
+
+        switch (format->u.video.compressed.h264.level)
+        {
+            case /* eAVEncH264VLevel1 */   10: level = "1";   break;
+            case /* eAVEncH264VLevel1_1 */ 11: level = "1.1"; break;
+            case /* eAVEncH264VLevel1_2 */ 12: level = "1.2"; break;
+            case /* eAVEncH264VLevel1_3 */ 13: level = "1.3"; break;
+            case /* eAVEncH264VLevel2 */   20: level = "2";   break;
+            case /* eAVEncH264VLevel2_1 */ 21: level = "2.1"; break;
+            case /* eAVEncH264VLevel2_2 */ 22: level = "2.2"; break;
+            case /* eAVEncH264VLevel3 */   30: level = "3";   break;
+            case /* eAVEncH264VLevel3_1 */ 31: level = "3.1"; break;
+            case /* eAVEncH264VLevel3_2 */ 32: level = "3.2"; break;
+            case /* eAVEncH264VLevel4 */   40: level = "4";   break;
+            case /* eAVEncH264VLevel4_1 */ 41: level = "4.1"; break;
+            case /* eAVEncH264VLevel4_2 */ 42: level = "4.2"; break;
+            case /* eAVEncH264VLevel5 */   50: level = "5";   break;
+            case /* eAVEncH264VLevel5_1 */ 51: level = "5.1"; break;
+            case /* eAVEncH264VLevel5_2 */ 52: level = "5.2"; break;
+            default:
+                ERR("Unrecognized H.264 level attribute %u\n", format->u.video.compressed.h264.level);
+                /* fallthrough */
+            case 0: level = NULL;
+        }
+
+        if (profile)
+            gst_caps_set_simple(caps, "profile", G_TYPE_STRING, profile, NULL);
+
+        if (level)
+            gst_caps_set_simple(caps, "level", G_TYPE_STRING, level, NULL);
+
+        return caps;
+    }
+
+    /* uncompressed types */
 
     /* compressed types */
 
@@ -1690,6 +1827,12 @@ static void *push_data(void *arg)
 
     assert(!(GST_PAD_IS_FLUSHING(parser->my_src)));
 
+    gst_pad_push_event(parser->my_src, gst_event_new_stream_start("wg_stream"));
+
+    segment = gst_segment_new();
+    gst_segment_init(segment, GST_FORMAT_BYTES);
+    gst_pad_push_event(parser->my_src, gst_event_new_segment(segment));
+
     for (;;)
     {
         GstBuffer *buffer = NULL;
@@ -1923,7 +2066,12 @@ static gboolean src_perform_seek(struct wg_parser *parser, GstEvent *event)
         gst_event_set_seqnum(flush_event, seqnum);
         gst_pad_push_event(parser->my_src, flush_event);
         if (thread)
+        {
             gst_pad_set_active(parser->my_src, 1);
+            seg = gst_segment_new();
+            gst_segment_init(seg, GST_FORMAT_BYTES);
+            gst_pad_push_event(parser->my_src, gst_event_new_segment(seg));
+        }
     }
 
     parser->next_offset = parser->start_offset = cur;
@@ -2483,6 +2631,89 @@ static BOOL raw_media_converter_init_gst(struct wg_parser *parser)
     return TRUE;
 }
 
+static BOOL raw_media_converter_init_gst(struct wg_parser *parser)
+{
+    BOOL video = parser->input_format.major_type == WG_MAJOR_TYPE_VIDEO;
+    struct wg_parser_stream *stream;
+    GstElement *convert, *resampler;
+    GstPad *their_src;
+    int ret;
+
+    if (parser->seekable)
+        return FALSE;
+
+    if (parser->expected_stream_count != 1)
+        return FALSE;
+
+    if (video)
+    {
+        if (!(convert = gst_element_factory_make("videoconvert", NULL)))
+        {
+            ERR("Failed to create videoconvert; are %u-bit GStreamer \"base\" plugins installed?\n",
+                    8 * (int)sizeof(void*));
+            return FALSE;
+        }
+
+        gst_bin_add(GST_BIN(parser->container), convert);
+
+        parser->their_sink = gst_element_get_static_pad(convert, "sink");
+        their_src = gst_element_get_static_pad(convert, "src");
+    }
+    else
+    {
+        if (!(convert = gst_element_factory_make("audioconvert", NULL)))
+        {
+            ERR("Failed to create audioconvert; are %u-bit GStreamer \"base\" plugins installed?\n",
+                    8 * (int)sizeof(void*));
+            return FALSE;
+        }
+
+        gst_bin_add(GST_BIN(parser->container), convert);
+
+        if (!(resampler = gst_element_factory_make("audioresample", NULL)))
+        {
+            ERR("Failed to create audioresample; are %u-bit GStreamer \"base\" plugins installed?\n",
+                    8 * (int)sizeof(void*));
+            return FALSE;
+        }
+
+        gst_bin_add(GST_BIN(parser->container), resampler);
+
+        gst_element_link(convert, resampler);
+        parser->their_sink = gst_element_get_static_pad(convert, "sink");
+        their_src = gst_element_get_static_pad(resampler, "src");
+    }
+
+    if ((ret = gst_pad_link(parser->my_src, parser->their_sink)) < 0)
+    {
+        ERR("Failed to link sink pads, error %d.\n", ret);
+        return FALSE;
+    }
+
+    if (!(stream = create_stream(parser)))
+        return FALSE;
+
+    stream->their_src = their_src;
+    gst_object_ref(stream->their_src);
+    if ((ret = gst_pad_link(stream->their_src, stream->my_sink)) < 0)
+    {
+        ERR("Failed to link source pads, error %d.\n", ret);
+        return FALSE;
+    }
+
+    gst_pad_set_active(stream->my_sink, 1);
+    gst_element_set_state(parser->container, GST_STATE_PAUSED);
+    gst_pad_set_active(parser->my_src, 1);
+    ret = gst_element_get_state(parser->container, NULL, NULL, -1);
+    if (ret == GST_STATE_CHANGE_FAILURE)
+    {
+        ERR("Failed to play stream.\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static struct wg_parser *wg_parser_create(void)
 {
     struct wg_parser *parser;
@@ -2533,6 +2764,15 @@ static struct wg_parser * CDECL wg_wave_parser_create(void)
 
     if ((parser = wg_parser_create()))
         parser->init_gst = wave_parser_init_gst;
+    return parser;
+}
+
+static struct wg_parser * CDECL wg_raw_media_converter_create(void)
+{
+    struct wg_parser *parser;
+
+    if ((parser = wg_parser_create()))
+        parser->init_gst = raw_media_converter_init_gst;
     return parser;
 }
 

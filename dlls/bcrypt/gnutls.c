@@ -87,6 +87,8 @@ static union key_data *key_data( struct key *key )
     return (union key_data *)key->private;
 }
 
+static BOOL dh_supported;
+
 /* Not present in gnutls version < 3.0 */
 static int (*pgnutls_cipher_tag)(gnutls_cipher_hd_t, void *, size_t);
 static int (*pgnutls_cipher_add_auth)(gnutls_cipher_hd_t, const void *, size_t);
@@ -129,6 +131,17 @@ static int (*pgnutls_dh_params_import_raw2)(gnutls_dh_params_t dh_params, const 
         const gnutls_datum_t * generator, unsigned key_bits);
 static int (*pgnutls_dh_params_export_raw)(gnutls_dh_params_t params, gnutls_datum_t * prime,
         gnutls_datum_t * generator, unsigned int *bits);
+
+static int (*pgnutls_dh_params_init)(gnutls_dh_params_t * dh_params);
+static void (*pgnutls_dh_params_deinit)(gnutls_dh_params_t dh_params);
+static int (*pgnutls_dh_params_generate2)(gnutls_dh_params_t dparams, unsigned int bits);
+static int (*pgnutls_dh_params_import_raw2)(gnutls_dh_params_t dh_params, const gnutls_datum_t * prime,
+        const gnutls_datum_t * generator, unsigned key_bits);
+static int (*pgnutls_dh_params_export_raw)(gnutls_dh_params_t params, gnutls_datum_t * prime,
+        gnutls_datum_t * generator, unsigned int *bits);
+static int (*pgnutls_dh_generate_key)(gnutls_dh_params_t dh_params, gnutls_datum_t *priv_key, gnutls_datum_t *pub_key);
+static int (*pgnutls_dh_compute_key)(gnutls_dh_params_t dh_params, const gnutls_datum_t *priv_key,
+        const gnutls_datum_t *pub_key, const gnutls_datum_t *peer_key, gnutls_datum_t *Z);
 
 static void *libgnutls_handle;
 
@@ -347,6 +360,39 @@ static BOOL gnutls_initialize(void)
         WARN("gnutls_cipher_add_auth not found\n");
         pgnutls_cipher_add_auth = compat_gnutls_cipher_add_auth;
     }
+    if (!(pgnutls_dh_params_init = dlsym( libgnutls_handle, "gnutls_dh_params_init" )))
+    {
+        WARN("gnutls_dh_params_init not found\n");
+    }
+    if (!(pgnutls_dh_params_deinit = dlsym( libgnutls_handle, "gnutls_dh_params_deinit" )))
+    {
+        WARN("gnutls_dh_params_deinit not found\n");
+    }
+    if (!(pgnutls_dh_params_generate2 = dlsym( libgnutls_handle, "gnutls_dh_params_generate2" )))
+    {
+        WARN("gnutls_dh_params_generate2 not found\n");
+    }
+    if (!(pgnutls_dh_params_import_raw2 = dlsym( libgnutls_handle, "gnutls_dh_params_import_raw2" )))
+    {
+        WARN("gnutls_dh_params_import_raw2 not found\n");
+    }
+    if (!(pgnutls_dh_params_export_raw = dlsym( libgnutls_handle, "gnutls_dh_params_export_raw" )))
+    {
+        WARN("gnutls_dh_params_export_raw not found\n");
+    }
+    if (!(pgnutls_dh_generate_key = dlsym( libgnutls_handle, "_gnutls_dh_generate_key" ))
+            && !(pgnutls_dh_generate_key = dlsym( libgnutls_handle, "gnutls_dh_generate_key" )))
+    {
+        WARN("gnutls_dh_generate_key not found\n");
+    }
+    if (!(pgnutls_dh_compute_key = dlsym( libgnutls_handle, "_gnutls_dh_compute_key" ))
+            && !(pgnutls_dh_compute_key = dlsym( libgnutls_handle, "gnutls_dh_compute_key" )))
+    {
+        WARN("gnutls_dh_compute_key not found\n");
+    }
+
+    dh_supported = pgnutls_dh_params_init && pgnutls_dh_params_generate2 && pgnutls_dh_params_import_raw2
+            && pgnutls_dh_generate_key && pgnutls_dh_compute_key;
 
     if ((ret = pgnutls_global_init()) != GNUTLS_E_SUCCESS)
     {
@@ -405,8 +451,11 @@ static BOOL gnutls_initialize(void)
     }
     if (!(pgnutls_decode_rs_value = dlsym( libgnutls_handle, "gnutls_decode_rs_value" )))
     {
-        WARN("gnutls_decode_rs_value not found\n");
-        pgnutls_decode_rs_value = compat_gnutls_decode_rs_value;
+        if (!(pgnutls_decode_rs_value = dlsym( libgnutls_handle, "_gnutls_decode_ber_rs_raw" )))
+        {
+            WARN("gnutls_decode_rs_value and legacy alternative _gnutls_decode_ber_rs_raw not found\n");
+            pgnutls_decode_rs_value = compat_gnutls_decode_rs_value;
+        }
     }
     if (!(pgnutls_privkey_import_rsa_raw = dlsym( libgnutls_handle, "gnutls_privkey_import_rsa_raw" )))
     {
@@ -1191,6 +1240,87 @@ static NTSTATUS CDECL key_dh_generate( struct key *key )
 }
 #endif
 
+static NTSTATUS CDECL key_dh_generate( struct key *key )
+{
+    gnutls_datum_t prime, generator, privkey, pubkey;
+    NTSTATUS status = STATUS_SUCCESS;
+    gnutls_dh_params_t dh_params;
+    ULONG key_length;
+    int ret;
+
+    if (!dh_supported)
+    {
+        ERR("DH is not available.\n");
+        return STATUS_NOT_IMPLEMENTED;
+    }
+
+    if ((ret = pgnutls_dh_params_init( &dh_params )))
+    {
+        pgnutls_perror( ret );
+        return STATUS_INTERNAL_ERROR;
+    }
+
+    key_length = key->u.a.bitlen / 8;
+
+    if (!(key->u.a.flags & KEY_FLAG_DH_PARAMS_SET))
+    {
+        /* Generate parameters, export and then import them back below.
+         * The bitlen in dh parameters (which is later used for keys generation)
+         * is not set to gnutls_dh_params_generate2 'bits' parameter as one
+         * could expect. gnutls_dh_params_generate2 generates 'q' (which is not
+         * actually needed for DH) with the estimated bit length and then
+         * sets the bit length to the 'q' bitlength. */
+        if ((ret = pgnutls_dh_params_generate2( dh_params, key->u.a.bitlen )))
+        {
+            pgnutls_perror( ret );
+            pgnutls_dh_params_deinit( dh_params );
+            return STATUS_INTERNAL_ERROR;
+        }
+        if ((ret = pgnutls_dh_params_export_raw( dh_params, &prime, &generator, NULL )))
+        {
+            pgnutls_perror( ret );
+            pgnutls_dh_params_deinit( dh_params );
+            return STATUS_INTERNAL_ERROR;
+        }
+
+        export_gnutls_datum( (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key->u.a.pubkey + 1), key_length, &prime, NULL );
+        export_gnutls_datum( (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key->u.a.pubkey + 1) + key_length,
+                key_length, &generator, NULL );
+        free( prime.data );
+        free( generator.data );
+
+        key->u.a.flags |= KEY_FLAG_DH_PARAMS_SET;
+    }
+
+    prime.size = generator.size = key_length;
+    prime.data = (UCHAR *)((BCRYPT_DH_KEY_BLOB *)key->u.a.pubkey + 1);
+    generator.data = (BYTE *)((BCRYPT_DH_KEY_BLOB *)key->u.a.pubkey + 1) + key_length;
+
+    if ((ret = pgnutls_dh_params_import_raw2( dh_params, &prime, &generator, key->u.a.bitlen )))
+    {
+        pgnutls_perror( ret );
+        pgnutls_dh_params_deinit( dh_params );
+        return STATUS_INTERNAL_ERROR;
+    }
+
+    if ((ret = pgnutls_dh_generate_key( dh_params, &privkey, &pubkey )))
+    {
+        pgnutls_perror( ret );
+        pgnutls_dh_params_deinit( dh_params );
+        return STATUS_INTERNAL_ERROR;
+    }
+
+    export_gnutls_datum( (BYTE *)((BCRYPT_DH_KEY_BLOB *)key->u.a.pubkey + 1) + 2 * key_length,
+            key_length, &pubkey, NULL );
+    export_gnutls_datum( key->u.a.privkey, key_length, &privkey, NULL);
+
+    free( privkey.data );
+    free( pubkey.data );
+    pgnutls_dh_params_deinit( dh_params );
+
+    return status;
+}
+
 static NTSTATUS CDECL key_asymmetric_generate( struct key *key )
 {
     gnutls_pk_algorithm_t pk_alg;
@@ -1223,6 +1353,9 @@ static NTSTATUS CDECL key_asymmetric_generate( struct key *key )
     case ALG_ID_DH:
         return key_dh_generate( key );
 
+    case ALG_ID_DH:
+        return key_dh_generate( key );
+
     default:
         FIXME( "algorithm %u not supported\n", key->alg_id );
         return STATUS_NOT_SUPPORTED;
@@ -1230,6 +1363,7 @@ static NTSTATUS CDECL key_asymmetric_generate( struct key *key )
 
     if ((ret = pgnutls_privkey_init( &handle )))
     {
+        ERR("gnutls error bitlen %u.\n", bitlen);
         pgnutls_perror( ret );
         return STATUS_INTERNAL_ERROR;
     }
@@ -1341,6 +1475,7 @@ static NTSTATUS CDECL key_import_ecc( struct key *key, UCHAR *buf, ULONG len )
 
     switch (key->alg_id)
     {
+    case ALG_ID_DH:
     case ALG_ID_ECDH_P256:
     case ALG_ID_ECDSA_P256:
         curve = GNUTLS_ECC_CURVE_SECP256R1;
@@ -2209,6 +2344,88 @@ static NTSTATUS CDECL key_secret_agreement( struct key *priv_key, struct key *pe
             ERR_(winediag)("Compiled without DH support.\n");
             return STATUS_NOT_IMPLEMENTED;
 #endif
+
+        case ALG_ID_ECDH_P256:
+            FIXME("ECDH is not supported.\n");
+            break;
+
+        default:
+            ERR( "unhandled algorithm %u\n", priv_key->alg_id );
+            return STATUS_INVALID_HANDLE;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS CDECL key_secret_agreement( struct key *priv_key, struct key *peer_key, struct secret *secret )
+{
+    int ret;
+
+    switch (priv_key->alg_id)
+    {
+        case ALG_ID_DH:
+        {
+            gnutls_datum_t prime, generator, priv, peer, secret_datum;
+            gnutls_dh_params_t dh_params;
+            ULONG key_length;
+
+            if (!dh_supported)
+            {
+                ERR("DH is not available.\n");
+                return STATUS_NOT_IMPLEMENTED;
+            }
+
+            if ((ret = pgnutls_dh_params_init( &dh_params )))
+            {
+                pgnutls_perror( ret );
+                return STATUS_INTERNAL_ERROR;
+            }
+
+            key_length = priv_key->u.a.bitlen / 8;
+
+            prime.size = generator.size = key_length;
+            prime.data = (UCHAR *)((BCRYPT_DH_KEY_BLOB *)priv_key->u.a.pubkey + 1);
+            generator.data = (BYTE *)((BCRYPT_DH_KEY_BLOB *)priv_key->u.a.pubkey + 1) + key_length;
+
+            if ((ret = pgnutls_dh_params_import_raw2( dh_params, &prime, &generator, priv_key->u.a.bitlen )))
+            {
+                pgnutls_perror( ret );
+                pgnutls_dh_params_deinit( dh_params );
+                return STATUS_INTERNAL_ERROR;
+            }
+
+            priv.size = peer.size = key_length;
+            priv.data = priv_key->u.a.privkey;
+            peer.data = peer_key->u.a.pubkey + sizeof(BCRYPT_DH_KEY_BLOB) + key_length * 2;
+
+            if (memcmp((BCRYPT_DH_KEY_BLOB *)priv_key->u.a.pubkey + 1,
+                    peer_key->u.a.pubkey + sizeof(BCRYPT_DH_KEY_BLOB), key_length * 2))
+            {
+                ERR("peer DH paramaters do not match.\n");
+                pgnutls_dh_params_deinit( dh_params );
+                return STATUS_INTERNAL_ERROR;
+            }
+
+            if ((ret = pgnutls_dh_compute_key( dh_params, &priv, NULL, &peer, &secret_datum )))
+            {
+                ERR("Error computing shared key.\n");
+                pgnutls_perror( ret );
+                pgnutls_dh_params_deinit( dh_params );
+                return STATUS_INTERNAL_ERROR;
+            }
+
+            TRACE("secret_datum.size %u, key_length %u.\n", secret_datum.size, key_length);
+            if (!(secret->data = RtlAllocateHeap( GetProcessHeap(), 0, key_length )))
+            {
+                ERR("No memory.\n");
+                free( secret_datum.data );
+                pgnutls_dh_params_deinit( dh_params );
+                return STATUS_NO_MEMORY;
+            }
+            export_gnutls_datum( secret->data, key_length, &secret_datum, NULL );
+            secret->data_len = key_length;
+            free( secret_datum.data );
+            break;
+        }
 
         case ALG_ID_ECDH_P256:
             FIXME("ECDH is not supported.\n");

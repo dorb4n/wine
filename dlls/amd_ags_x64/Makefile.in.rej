@@ -1,0 +1,19 @@
+--- dlls/amd_ags_x64/Makefile.in
++++ dlls/amd_ags_x64/Makefile.in
+@@ -2,5 +2,7 @@ MODULE    = amd_ags_x64.dll
+ IMPORTS   = vulkan-1
+ IMPORTLIB = amd_ags_x64
+ 
++EXTRADLLFLAGS = -mno-cygwin -Wb,--prefer-native
++
+ C_SRCS = \
+ 	amd_ags_x64_main.c
+--- dlls/amd_ags_x64/Makefile.in
++++ dlls/amd_ags_x64/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = amd_ags_x64.dll
+-IMPORTS   = vulkan-1
++IMPORTS   = version vulkan-1
+ IMPORTLIB = amd_ags_x64
+ 
+ EXTRADLLFLAGS = -mno-cygwin

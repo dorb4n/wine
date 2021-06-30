@@ -1,0 +1,13 @@
+--- dlls/winex11.drv/xdnd.c
++++ dlls/winex11.drv/xdnd.c
+@@ -407,8 +409,9 @@ void X11DRV_XDND_PositionEvent( HWND hWnd, XClientMessageEvent *event )
+  *
+  * Handle an XdndDrop event.
+  */
+-void X11DRV_XDND_DropEvent( HWND hWnd, XClientMessageEvent *event )
++void X11DRV_XDND_DropEvent( HWND hWnd, XEvent *xev )
+ {
++    XClientMessageEvent *event = &xev->xclient;
+     XClientMessageEvent e;
+     IDropTarget *dropTarget;
+     DWORD effect = XDNDDropEffect;

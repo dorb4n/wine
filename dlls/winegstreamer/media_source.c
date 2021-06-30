@@ -880,6 +880,13 @@ static HRESULT WINAPI media_source_get_service_GetService(IMFGetService *iface, 
     struct media_source *source = impl_from_IMFGetService(iface);
 
     TRACE("%p, %s, %s, %p.\n", iface, debugstr_guid(service), debugstr_guid(riid), obj);
+    /* Hack to skip this to fix UE games other than Deeprock Galactic since they choke here*/
+    const char *sgi = getenv("SteamGameId");
+    if (sgi && !strcmp(sgi, "548430"))
+    {
+        FIXME("stub %p, %s, %s, %p.\n", iface, debugstr_guid(service), debugstr_guid(riid), obj);
+        return E_NOINTERFACE;
+    }
 
     *obj = NULL;
 

@@ -52,6 +52,14 @@
 /// * Draw index and Atomic U64 intrinsics for both DX11 and DX12.
 ///
 /// ---------------------------------------
+/// What's new in AGS 5.4 since version 5.3
+/// ---------------------------------------
+/// AGS 5.4 includes the following updates:
+/// * A more detailed description of the GPU architecture, now including RDNA GPUs.
+/// * Navi 10, Navi 14 and Radeon 7 core and memory speeds returned.
+/// * Draw index and Atomic U64 intrinsics for both DX11 and DX12.
+///
+/// ---------------------------------------
 /// What's new in AGS 5.3 since version 5.2
 /// ---------------------------------------
 /// AGS 5.3 includes the following updates:
@@ -59,11 +67,34 @@
 /// * A Radeon Software Version helper to determine whether the installed driver meets your game's minimum driver version requirements.
 /// * Freesync HDR Gamma 2.2 mode which uses a 1010102 swapchain and can be considered as an alternative to using the 64 bit swapchain required for Freesync HDR scRGB.
 ///
+/// ---------------------------------------
+/// What's new in AGS 5.3 since version 5.2
+/// ---------------------------------------
+/// AGS 5.3 includes the following updates:
+/// * DX11 deferred context support for Multi Draw Indirect and UAV Overlap extensions.
+/// * A Radeon Software Version helper to determine whether the installed driver meets your game's minimum driver version requirements.
+/// * Freesync2 Gamma 2.2 mode which uses a 1010102 swapchain and can be considered as an alternative to using the 64 bit swapchain required for Freesync2 scRGB.
+///
 /// What's new in AGS 5.2.1 since version 5.2.0
 /// ---------------------------------------
 /// * Fix for crash when using Eyefinity
 /// * Fix for DX12 app registration in the UWP version
 ///
+///
+/// What's new in AGS 5.2.1 since version 5.2.0
+/// ---------------------------------------
+/// * Fix for crash when using Eyefinity
+/// * Fix for DX12 app registration in the UWP version
+///
+///
+/// What's new in AGS 5.2.0 since version 5.1
+/// ---------------------------------------
+/// AGS 5.2 includes the following updates:
+/// * DX12 app registration API
+/// * DX11 breadcrumb marker API for tracking down GPU hangs:\ref agsDriverExtensionsDX11_WriteBreadcrumb
+/// * DX12 extensions now require the creation of the device via \ref agsDriverExtensionsDX12_CreateDevice
+/// * agsGetCrossfireGPUCount has been removed in favor of retrieving the value from \ref agsDriverExtensionsDX11_CreateDevice
+/// * API change that fixes a reference leak in \ref agsDriverExtensionsDX11_DestroyDevice
 ///
 /// What's new in AGS 5.2.0 since version 5.1
 /// ---------------------------------------
@@ -143,6 +174,9 @@ extern "C" {
 #define AGS_MAKE_VERSION( major, minor, patch ) ( ( major << 22 ) | ( minor << 12 ) | patch ) ///< Macro to create the app and engine versions for the fields in \ref AGSDX12ExtensionParams and \ref AGSDX11ExtensionParams and the Radeon Software Version
 #define AGS_UNSPECIFIED_VERSION 0xFFFFAD00                                                    ///< Use this to specify no version
 /// @}
+
+#define AGS_MAKE_VERSION( major, minor, patch ) ( ( major << 22 ) | ( minor << 12 ) | patch ) ///< Macro to create the app and engine versions for the fields in \ref AGSDX12ExtensionParams and \ref AGSDX11ExtensionParams and the Radeon Software Version
+#define AGS_UNSPECIFIED_VERSION 0xFFFFAD00                                                    ///< Use this to specify no version
 
 // Forward declaration of D3D11 types
 struct IDXGIAdapter;
@@ -275,6 +309,13 @@ typedef enum AGSDisplaySettingsFlags
 
 /// @}
 
+/// The display settings flags.
+typedef enum AGSDisplaySettingsFlags
+{
+    AGS_DISPLAYSETTINGSFLAG_DISABLE_LOCAL_DIMMING           = 1 << 0,   ///< Disables local dimming if possible
+} AGSDisplaySettingsFlags;
+
+
 typedef struct AGSContext AGSContext;  ///< All function calls in AGS require a pointer to a context. This is generated via \ref agsInit
 
 /// The rectangle struct used by AGS.
@@ -362,6 +403,19 @@ typedef enum AsicFamily
     AsicFamily_RDNA,                                            ///< AMD RDNA architecture
 
     AsicFamily_Count                                            ///< Number of enumerated ASIC families
+} AsicFamily;
+
+/// The ASIC family
+typedef enum AsicFamily
+{
+    AsicFamily_Unknown,                                         ///< Unknown architecture, potentially from another IHV. Check \ref AGSDeviceInfo::vendorId
+    AsicFamily_PreGCN,                                          ///< Pre GCN architecture.
+    AsicFamily_GCN1,                                            ///< AMD GCN 1 architecture: Oland, Cape Verde, Pitcairn & Tahiti.
+    AsicFamily_GCN2,                                            ///< AMD GCN 2 architecture: Hawaii & Bonaire.  This also includes APUs Kaveri and Carrizo.
+    AsicFamily_GCN3,                                            ///< AMD GCN 3 architecture: Tonga & Fiji.
+    AsicFamily_GCN4,                                            ///< AMD GCN 4 architecture: Polaris.
+    AsicFamily_Vega,                                            ///< AMD Vega architecture, including Raven Ridge (ie AMD Ryzen CPU + AMD Vega GPU).
+    AsicFamily_RDNA                                             ///< AMD RDNA architecture
 } AsicFamily;
 
 /// The device info struct used to describe a physical GPU enumerated by AGS
@@ -498,13 +552,7 @@ typedef struct AGSDeviceInfo_541
     int                             adlAdapterIndex;                ///< Internally used index into the ADL list of adapters
 } AGSDeviceInfo_541;
 
-typedef union AGSDeviceInfo
-{
-    AGSDeviceInfo_511 agsDeviceInfo511;
-    AGSDeviceInfo_520 agsDeviceInfo520;
-    AGSDeviceInfo_540 agsDeviceInfo540;
-    AGSDeviceInfo_541 agsDeviceInfo541;
-} AGSDeviceInfo;
+struct AGSDeviceInfo;
 
 /// \defgroup general General API functions
 /// API for initialization, cleanup, HDR display modes and Crossfire GPU count
@@ -545,7 +593,7 @@ typedef struct AGSGPUInfo
     const char*             radeonSoftwareVersion;          ///< The Radeon Software Version
 
     int                     numDevices;                     ///< Number of GPUs in the system
-    AGSDeviceInfo*          devices;                        ///< List of GPUs in the system
+    struct AGSDeviceInfo*   devices;                        ///< List of GPUs in the system
 } AGSGPUInfo;
 
 /// The struct to specify the display settings to the driver.
@@ -594,6 +642,24 @@ typedef enum AGSDriverVersionResult
     AGS_SOFTWAREVERSIONCHECK_OLDER,                           ///< The reported Radeon Software Version is older than the required version
     AGS_SOFTWAREVERSIONCHECK_UNDEFINED                        ///< The check could not determine as result.  This could be because it is a private or custom driver or just invalid arguments.
 } AGSDriverVersionResult;
+
+/// The result returned from \ref agsCheckDriverVersion
+typedef enum AGSDriverVersionResult
+{
+    AGS_SOFTWAREVERSIONCHECK_OK,                              ///< The reported Radeon Software Version is newer or the same as the required version
+    AGS_SOFTWAREVERSIONCHECK_OLDER,                           ///< The reported Radeon Software Version is older than the required version
+    AGS_SOFTWAREVERSIONCHECK_UNDEFINED                        ///< The check could not determine as result.  This could be because it is a private or custom driver or just invalid arguments.
+} AGSDriverVersionResult;
+
+///
+/// Helper function to check the installed software version against the required software version.
+///
+/// \param [in] radeonSoftwareVersionReported       The Radeon Software Version returned from \ref AGSGPUInfo::radeonSoftwareVersion.
+/// \param [in] radeonSoftwareVersionRequired       The Radeon Software Version to check against.  This is specificed using \ref AGS_MAKE_VERSION.
+/// \return                                         The result of the check.
+///
+AMD_AGS_API AGSDriverVersionResult agsCheckDriverVersion( const char* radeonSoftwareVersionReported, unsigned int radeonSoftwareVersionRequired );
+
 
 ///
 /// Helper function to check the installed software version against the required software version.
@@ -737,7 +803,19 @@ AMD_AGS_API AGSReturnCode agsDriverExtensionsDX12_DestroyDevice( AGSContext* con
 /// When using the HLSL shader extensions please note:
 /// * The shader compiler should not use the D3DCOMPILE_SKIP_OPTIMIZATION option, otherwise it will not work.
 /// * The intrinsic instructions require a 5.1 shader model.
-/// * The Root Signature will need to use an extra resource and sampler. These are not real resources/samplers, they are just used to encode the intrinsic instruction.
+/// * The Root Signature will need to reserve an extra UAV resource slot. This is not a real resource that requires allocating, it is just used to encode the intrinsic instructions.
+///
+/// The easiest way to set up the reserved UAV slot is to specify it at u0.  The register space id will automatically be assumed to be \ref AGS_DX12_SHADER_INSTRINSICS_SPACE_ID.
+/// The HLSL expects this as default and the set up code would look similar to this:
+/// \code{.cpp}
+/// CD3DX12_DESCRIPTOR_RANGE range[];
+/// ...
+/// range[ 0 ].Init( D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, AGS_DX12_SHADER_INSTRINSICS_SPACE_ID ); // u0 at driver-reserved space id
+/// \endcode
+///
+/// Newer drivers also support a user-specified slot in which case the register space id is assumed to be 0.  It is important that the \ref AGS_DX12_EXTENSION_INTRINSIC_UAV_BIND_SLOT bit is set
+/// to ensure the driver can support this.  If not, then u0 and \ref AGS_DX12_SHADER_INSTRINSICS_SPACE_ID must be used.
+/// If the driver does support this feature and a non zero slot is required, then the HLSL must also define AMD_EXT_SHADER_INTRINSIC_UAV_OVERRIDE as the matching slot value.
 ///
 /// \param [in] context                             Pointer to a context. This is generated by \ref agsInit
 /// \param [in] device                              The D3D12 device.
@@ -1159,6 +1237,12 @@ AMD_AGS_API AGSReturnCode agsDriverExtensionsDX11_WriteBreadcrumb( AGSContext* c
 /// API for primitive topologies
 /// @{
 
+/// @}
+
+/// \defgroup dx11UAVOverlap UAV Overlap
+/// API for enabling overlapping UAV writes
+/// @{
+
 ///
 /// Function used to set the primitive topology. If you are using any of the extended topology types, then this function should
 /// be called to set ALL topology types.
@@ -1280,6 +1364,8 @@ AMD_AGS_API AGSReturnCode agsDriverExtensionsDX11_SetDepthBounds( AGSContext* co
 ///         UINT StartInstanceLocation;
 ///     };
 /// \endcode
+///
+/// Example usage can be seen in AMD's GeometryFX (https://github.com/GPUOpen-Effects/GeometryFX).  In particular, in this file: https://github.com/GPUOpen-Effects/GeometryFX/blob/master/amd_geometryfx/src/AMD_GeometryFX_Filtering.cpp
 ///
 /// Example usage can be seen in AMD's GeometryFX (https://github.com/GPUOpen-Effects/GeometryFX).  In particular, in this file: https://github.com/GPUOpen-Effects/GeometryFX/blob/master/amd_geometryfx/src/AMD_GeometryFX_Filtering.cpp
 ///
@@ -1408,6 +1494,24 @@ AMD_AGS_API AGSReturnCode agsDriverExtensionsDX11_SetViewBroadcastMasks( AGSCont
 /// \param [out] maxRectCount                       Returned max number of clip rectangles.
 ///
 AMD_AGS_API AGSReturnCode agsDriverExtensionsDX11_GetMaxClipRects( AGSContext* context, unsigned int* maxRectCount );
+
+/// The Crossfire API transfer types
+typedef enum AGSAfrTransferType
+{
+    AGS_AFR_TRANSFER_DEFAULT                                = 0,    ///< Default Crossfire driver resource tracking
+    AGS_AFR_TRANSFER_DISABLE                                = 1,    ///< Turn off driver resource tracking
+    AGS_AFR_TRANSFER_1STEP_P2P                              = 2,    ///< App controlled GPU to next GPU transfer
+    AGS_AFR_TRANSFER_2STEP_NO_BROADCAST                     = 3,    ///< App controlled GPU to next GPU transfer using intermediate system memory
+    AGS_AFR_TRANSFER_2STEP_WITH_BROADCAST                   = 4,    ///< App controlled GPU to all render GPUs transfer using intermediate system memory
+} AGSAfrTransferType;
+
+/// The Crossfire API transfer engines
+typedef enum AGSAfrTransferEngine
+{
+    AGS_AFR_TRANSFERENGINE_DEFAULT                          = 0,    ///< Use default engine for Crossfire API transfers
+    AGS_AFR_TRANSFERENGINE_3D_ENGINE                        = 1,    ///< Use 3D engine for Crossfire API transfers
+    AGS_AFR_TRANSFERENGINE_COPY_ENGINE                      = 2,    ///< Use Copy engine for Crossfire API transfers
+} AGSAfrTransferEngine;
 
 ///
 /// Function sets clip rectangles.

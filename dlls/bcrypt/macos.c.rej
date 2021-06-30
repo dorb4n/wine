@@ -1,0 +1,12 @@
+--- dlls/bcrypt/macos.c
++++ dlls/bcrypt/macos.c
+@@ -305,7 +311,8 @@ static const struct key_funcs key_funcs =
+     key_export_ecc,
+     key_import_dsa_capi,
+     key_import_ecc,
+-    key_import_rsa
++    key_import_rsa,
++    key_secret_agreement,
+ };
+ 
+ NTSTATUS CDECL __wine_init_unix_lib( HMODULE module, DWORD reason, const void *ptr_in, void *ptr_out )

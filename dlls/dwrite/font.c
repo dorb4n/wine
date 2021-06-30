@@ -952,7 +952,8 @@ static HRESULT WINAPI dwritefontface_GetRecommendedRenderingMode(IDWriteFontFace
 
     ppem = emSize * ppdip;
 
-    if (ppem >= RECOMMENDED_OUTLINE_AA_THRESHOLD) {
+    /* HACK: disable outline rendering mode to workaround d2d issue */
+    if (0 && ppem >= RECOMMENDED_OUTLINE_AA_THRESHOLD) {
         *mode = DWRITE_RENDERING_MODE_OUTLINE;
         return S_OK;
     }
@@ -4490,7 +4491,11 @@ HRESULT create_font_collection(IDWriteFactory7 *factory, IDWriteFontFileEnumerat
             }
         }
 
-        IDWriteFontFileStream_Release(stream);
+        const char *sgi = getenv("SteamGameId");
+
+        if ((!sgi) | (sgi && strcmp(sgi, "244210"))) {
+            IDWriteFontFileStream_Release(stream);
+        }
     }
 
     LIST_FOR_EACH_ENTRY_SAFE(fileenum, fileenum2, &scannedfiles, struct fontfile_enum, entry) {

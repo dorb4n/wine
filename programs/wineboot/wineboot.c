@@ -381,12 +381,134 @@ static void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)
 {
 }
 
+static UINT64 read_tsc_frequency(void)
+{
+    UINT64 freq = 0;
+
+/* FIXME: Intel provides TSC freq in some CPUID but it's been slightly broken,
+   fix it properly and test it on real Intel hardware */
+
+#if 0
+    int regs[4], cpuid_level, tmp;
+    UINT64 denom, numer;
+
+    __cpuid(regs, 0);
+    tmp = regs[2];
+    regs[2] = regs[3];
+    regs[3] = tmp;
+
+    /* only available on some intel CPUs */
+    if (memcmp(regs + 1, "GenuineIntel", 12)) freq = 0;
+    else if ((cpuid_level = regs[0]) < 0x15) freq = 0;
+    else
+    {
+        __cpuid(regs, 0x15);
+        if (!(denom = regs[0]) || !(numer = regs[1])) freq = 0;
+        else
+        {
+            if ((freq = regs[2])) freq = freq * numer / denom;
+            else if (cpuid_level >= 0x16)
+            {
+                __cpuid(regs, 0x16); /* eax is base freq in MHz */
+                freq = regs[0] * (UINT64)1000000;
+            }
+            else freq = 0;
+        }
+
+        if (!freq) WARN("Failed to read TSC frequency from CPUID, falling back to calibration.\n");
+        else TRACE("TSC frequency read from CPUID, found %I64u Hz\n", freq);
+    }
+#endif
+
+    if (freq == 0)
+    {
+        LONGLONG time0, time1, tsc0, tsc1, tsc2, tsc3, freq0, freq1, error;
+        unsigned int aux;
+        UINT retries = 50;
+
+        do
+        {
+            tsc0 = __rdtscp(&aux);
+            time0 = RtlGetSystemTimePrecise();
+            tsc1 = __rdtscp(&aux);
+            Sleep(1);
+            tsc2 = __rdtscp(&aux);
+            time1 = RtlGetSystemTimePrecise();
+            tsc3 = __rdtscp(&aux);
+
+            freq0 = (tsc2 - tsc0) * 10000000 / (time1 - time0);
+            freq1 = (tsc3 - tsc1) * 10000000 / (time1 - time0);
+            error = llabs((freq1 - freq0) * 1000000 / min(freq1, freq0));
+        }
+        while (error > 100 && retries--);
+
+        if (!retries) WARN("TSC frequency calibration failed, unstable TSC?\n");
+        else
+        {
+            freq = (freq0 + freq1) / 2;
+            TRACE("TSC frequency calibration complete, found %I64u Hz\n", freq);
+        }
+    }
+
+    return freq;
+}
+
 static void initialize_qpc_features(struct _KUSER_SHARED_DATA *data)
 {
+    int regs[4];
+
+    if (data->QpcBypassEnabled) return;
+
     data->QpcBypassEnabled = 0;
     data->QpcFrequency = TICKSPERSEC;
     data->QpcShift = 0;
     data->QpcBias = 0;
+
+    if (!data->ProcessorFeatures[PF_RDTSC_INSTRUCTION_AVAILABLE])
+    {
+        WARN("No RDTSC support, disabling QpcBypass\n");
+        return;
+    }
+
+    __cpuid(regs, 0x80000000);
+    if (regs[0] < 0x80000007)
+    {
+        WARN("Unable to check invariant TSC, disabling QpcBypass\n");
+        return;
+    }
+
+    /* check for invariant tsc bit */
+    __cpuid(regs, 0x80000007);
+    if (!(regs[3] & (1 << 8)))
+    {
+        WARN("No invariant TSC, disabling QpcBypass\n");
+        return;
+    }
+    data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_ENABLED;
+
+    /* check for rdtscp support bit */
+    __cpuid(regs, 0x80000001);
+    if ((regs[3] & (1 << 27)))
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_RDTSCP;
+    else if (data->ProcessorFeatures[PF_XMMI64_INSTRUCTIONS_AVAILABLE])
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_LFENCE;
+    else
+        data->QpcBypassEnabled |= SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_MFENCE;
+
+    if ((data->QpcFrequency = (read_tsc_frequency() >> 10)))
+    {
+        data->QpcShift = 10;
+        data->QpcBias = 0;
+    }
+
+    if (!data->QpcFrequency)
+    {
+        WARN("Unable to calibrate TSC frequency, disabling QpcBypass.\n");
+        data->QpcBypassEnabled = 0;
+        data->QpcFrequency = TICKSPERSEC;
+        data->QpcShift = 0;
+        data->QpcBias = 0;
+    }
 }
 
 #endif

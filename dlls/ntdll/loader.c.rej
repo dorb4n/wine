@@ -1,0 +1,28 @@
+--- dlls/ntdll/loader.c
++++ dlls/ntdll/loader.c
+@@ -3255,6 +3255,7 @@ void WINAPI RtlExitUserProcess( DWORD status )
+     RtlAcquirePebLock();
+     NtTerminateProcess( 0, status );
+     LdrShutdownProcess();
++    HEAP_notify_thread_destroy(TRUE);
+     for (;;) NtTerminateProcess( GetCurrentProcess(), status );
+ }
+ 
+--- dlls/ntdll/loader.c
++++ dlls/ntdll/loader.c
+@@ -4031,6 +4031,7 @@ static NTSTATUS process_init(void)
+         ANSI_STRING func_name;
+         WINE_MODREF *kernel32;
+         PEB *peb = NtCurrentTeb()->Peb;
++        DWORD hci = 2;
+ 
+         peb->LdrData            = &ldr;
+         peb->FastPebLock        = &peb_lock;
+@@ -4125,6 +4126,7 @@ static NTSTATUS process_init(void)
+ #endif
+         wm = build_main_module();
+         wm->ldr.LoadCount = -1;
++        RtlSetHeapInformation( GetProcessHeap(), HeapCompatibilityInformation, &hci, sizeof(hci) );
+ 
+         build_ntdll_module();
+ 
